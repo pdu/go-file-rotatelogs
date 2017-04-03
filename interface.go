@@ -20,6 +20,7 @@ type RotateLogs struct {
 	outFh        *os.File
 	pattern      *strftime.Strftime
 	rotationTime time.Duration
+	ch           chan []byte
 }
 
 // Clock is the interface used by the RotateLogs
