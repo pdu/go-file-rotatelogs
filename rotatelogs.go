@@ -1,4 +1,4 @@
-// package rotatelogs is a port of File-RotateLogs from Perl
+// Package rotatelogs is a port of File-RotateLogs from Perl
 // (https://metacpan.org/release/File-RotateLogs), and it allows
 // you to automatically rotate output files when you write to them
 // according to the filename pattern that you can specify.
@@ -21,6 +21,7 @@ func (c clockFn) Now() time.Time {
 	return c()
 }
 
+// Configure the RotateLogs
 func (o OptionFn) Configure(rl *RotateLogs) error {
 	return o(rl)
 }
@@ -81,6 +82,16 @@ func WithRotationTime(d time.Duration) Option {
 	})
 }
 
+// WithBuffer creates a new Option that sets the
+// channel buffer size
+func WithBuffer(l int) Option {
+	return OptionFn(func(rl *RotateLogs) error {
+		close(rl.ch)
+		rl.ch = make(chan []byte, l)
+		return nil
+	})
+}
+
 // New creates a new RotateLogs object. A log filename pattern
 // must be passed. Optional `Option` parameters may be passed
 func New(pattern string, options ...Option) (*RotateLogs, error) {
@@ -99,9 +110,24 @@ func New(pattern string, options ...Option) (*RotateLogs, error) {
 	rl.globPattern = globPattern
 	rl.pattern = strfobj
 	rl.rotationTime = 24 * time.Hour
+	rl.ch = make(chan []byte)
 	for _, opt := range options {
 		opt.Configure(&rl)
 	}
+
+	go func() {
+	outer:
+		for {
+			select {
+			case p, ok := <-rl.ch:
+				if ok {
+					rl.write(p)
+				} else {
+					break outer
+				}
+			}
+		}
+	}()
 
 	return &rl, nil
 }
@@ -118,6 +144,11 @@ func (rl *RotateLogs) genFilename() string {
 // If we have reached rotation time, the target file gets
 // automatically rotated, and also purged if necessary.
 func (rl *RotateLogs) Write(p []byte) (n int, err error) {
+	rl.ch <- p
+	return len(p), nil
+}
+
+func (rl *RotateLogs) write(p []byte) (n int, err error) {
 	// Guard against concurrent writes
 	rl.mutex.Lock()
 	defer rl.mutex.Unlock()
@@ -282,6 +313,8 @@ func (rl *RotateLogs) rotate(filename string) error {
 func (rl *RotateLogs) Close() error {
 	rl.mutex.Lock()
 	defer rl.mutex.Unlock()
+
+	close(rl.ch)
 
 	if rl.outFh == nil {
 		return nil
